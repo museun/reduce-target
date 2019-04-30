@@ -20,6 +20,6 @@ for example, removing all target directories under ~/dev/rs:
 ```
 reduce-target -d ~/dev/rs -s --sweep
                ^           ^   ^--- remove directories
-               |           \--- display stats
-               \--- root directory
+               ^           ^--- display stats
+               ^--- root directory
 ```
