@@ -46,13 +46,6 @@ impl Options {
     }
 }
 
-#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Record {
-    size: u64,
-    files: u64,
-    directories: u64,
-}
-
 fn humanize(d: u64) -> String {
     const SIZES: [char; 9] = ['B', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y'];
 
@@ -98,6 +91,13 @@ fn find_targets(root: impl AsRef<Path>) -> Result<Vec<PathBuf>, std::io::Error> 
     Ok(paths)
 }
 
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Record {
+    size: u64,
+    files: u64,
+    directories: u64,
+}
+
 fn sum_targets(targets: &[PathBuf]) -> HashMap<&PathBuf, Record> {
     fn sum_target(path: &PathBuf) -> Record {
         walkdir::WalkDir::new(path)
@@ -128,24 +128,21 @@ fn sum_targets(targets: &[PathBuf]) -> HashMap<&PathBuf, Record> {
 fn main() -> Result<(), std::io::Error> {
     let opts = Options::parse_args_default_or_exit();
 
-    if opts.sweep {}
-    if opts.stats {}
-
     let root = opts.get_dir();
     let targets = find_targets(&root)?;
     let sums = sum_targets(&targets);
 
-    let list = sums.into_iter().map(|(k, v)| (k, v)).collect::<Vec<_>>();
+    let list = sums.into_iter().collect::<Vec<_>>();
 
     if opts.stats || !opts.sweep {
         // clone so we can sort it, but still have it unsorted later
         let mut list = list.clone();
         list.sort_unstable_by(|(_, l), (_, r)| l.cmp(&r).reverse());
         for (k, v) in &list {
-            println!("{}:", k.to_str().unwrap());
-            println!("\t{: <6}: {: >10}", "size", humanize(v.size));
-            println!("\t{: <6}: {: >10}", "files", commaize(v.files));
-            println!("\t{: <6}: {: >10}", "dirs", commaize(v.directories));
+            println!("{}", k.to_str().unwrap());
+            println!("{: >5}: {: >10}", "size", humanize(v.size));
+            println!("{: >5}: {: >10}", "files", commaize(v.files));
+            println!("{: >5}: {: >10}", "dirs", commaize(v.directories));
         }
         if !opts.sweep {
             return Ok(());
