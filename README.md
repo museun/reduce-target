@@ -4,6 +4,7 @@ this lists and optionally removes all target directories from a top-level down
 this is useful for, **dumbly**, nuking a ton of rust projects build caches to restore a few (dozen ..or hundreds in my case) gigabytes of disk space
 
 it only recursively transverses until it finds a directory named `target`
+
 usage:
 ```txt
 Optional arguments:
