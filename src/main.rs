@@ -1,6 +1,5 @@
 use gumdrop::Options as _;
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 macro_rules! abort {
@@ -98,7 +97,7 @@ struct Record {
     directories: u64,
 }
 
-fn sum_targets(targets: &[PathBuf]) -> HashMap<&PathBuf, Record> {
+fn sum_targets(targets: &[PathBuf]) -> Vec<(&PathBuf, Record)> {
     fn sum_target(path: &PathBuf) -> Record {
         walkdir::WalkDir::new(path)
             .into_iter()
@@ -119,10 +118,44 @@ fn sum_targets(targets: &[PathBuf]) -> HashMap<&PathBuf, Record> {
             })
     }
 
-    targets
-        .iter()
-        .map(|target| (target, sum_target(target)))
-        .collect()
+    // this could be better (e.g. using the IndexSet type from the IndexMap crate)
+    // its something like o(log n)
+    struct OrderedSet<T>(Vec<T>);
+
+    impl<T: PartialEq> OrderedSet<T> {
+        pub fn with_capacity(d: usize) -> Self {
+            OrderedSet(Vec::with_capacity(d))
+        }
+        pub fn contains<F>(&self, cmp: F) -> bool
+        where
+            F: Fn(&T) -> bool,
+        {
+            self.0.iter().any(cmp)
+        }
+        pub fn insert(&mut self, d: T) -> bool {
+            if self.contains(|c| c == &d) {
+                return false;
+            }
+            self.0.push(d);
+            true
+        }
+    }
+
+    impl<T> IntoIterator for OrderedSet<T> {
+        type Item = T;
+        type IntoIter = std::vec::IntoIter<Self::Item>;
+        fn into_iter(self) -> Self::IntoIter {
+            self.0.into_iter()
+        }
+    }
+
+    let mut set = OrderedSet::with_capacity(targets.len());
+    for target in targets {
+        if !set.contains(|d: &(&PathBuf, Record)| *d.0 == *target) {
+            set.insert((target, sum_target(target)));
+        }
+    }
+    set.0
 }
 
 fn main() -> Result<(), std::io::Error> {
@@ -132,11 +165,9 @@ fn main() -> Result<(), std::io::Error> {
     let targets = find_targets(&root)?;
     let sums = sum_targets(&targets);
 
-    let list = sums.into_iter().collect::<Vec<_>>();
-
     if opts.stats || !opts.sweep {
         // clone so we can sort it, but still have it unsorted later
-        let mut list = list.clone();
+        let mut list = sums.clone();
         list.sort_unstable_by(|(_, l), (_, r)| l.cmp(&r).reverse());
         for (k, v) in &list {
             println!("{}", k.to_str().unwrap());
@@ -150,7 +181,7 @@ fn main() -> Result<(), std::io::Error> {
     }
 
     if opts.sweep {
-        for dir in list.iter().map(|(dir, _)| (dir.to_str())).flatten() {
+        for dir in sums.iter().map(|(dir, _)| (dir.to_str())).flatten() {
             match std::fs::remove_dir_all(dir) {
                 Ok(..) => println!("removed: {}", dir),
                 Err(err) => eprintln!("could not remove: {} because {}", dir, err),
