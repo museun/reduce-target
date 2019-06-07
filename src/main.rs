@@ -1,4 +1,5 @@
 use gumdrop::Options as _;
+use indexmap::IndexSet;
 
 use std::path::{Path, PathBuf};
 
@@ -20,7 +21,7 @@ struct Options {
     #[options(help = "root directory to search")]
     directory: Option<String>,
 
-    #[options(help = "prints directories statistics", short = "s")]
+    #[options(help = "prints directory statistics", short = "s")]
     stats: bool,
 
     #[options(help = "sweeps all directories", no_short)]
@@ -90,14 +91,14 @@ fn find_targets(root: impl AsRef<Path>) -> Result<Vec<PathBuf>, std::io::Error> 
     Ok(paths)
 }
 
-#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 struct Record {
     size: u64,
     files: u64,
     directories: u64,
 }
 
-fn sum_targets(targets: &[PathBuf]) -> Vec<(&PathBuf, Record)> {
+fn sum_targets(targets: &[PathBuf]) -> IndexSet<(&PathBuf, Record)> {
     fn sum_target(path: &PathBuf) -> Record {
         walkdir::WalkDir::new(path)
             .into_iter()
@@ -118,44 +119,11 @@ fn sum_targets(targets: &[PathBuf]) -> Vec<(&PathBuf, Record)> {
             })
     }
 
-    // this could be better (e.g. using the IndexSet type from the IndexMap crate)
-    // its something like o(log n)
-    struct OrderedSet<T>(Vec<T>);
-
-    impl<T: PartialEq> OrderedSet<T> {
-        pub fn with_capacity(d: usize) -> Self {
-            OrderedSet(Vec::with_capacity(d))
-        }
-        pub fn contains<F>(&self, cmp: F) -> bool
-        where
-            F: Fn(&T) -> bool,
-        {
-            self.0.iter().any(cmp)
-        }
-        pub fn insert(&mut self, d: T) -> bool {
-            if self.contains(|c| c == &d) {
-                return false;
-            }
-            self.0.push(d);
-            true
-        }
-    }
-
-    impl<T> IntoIterator for OrderedSet<T> {
-        type Item = T;
-        type IntoIter = std::vec::IntoIter<Self::Item>;
-        fn into_iter(self) -> Self::IntoIter {
-            self.0.into_iter()
-        }
-    }
-
-    let mut set = OrderedSet::with_capacity(targets.len());
+    let mut set = IndexSet::with_capacity(targets.len());
     for target in targets {
-        if !set.contains(|d: &(&PathBuf, Record)| *d.0 == *target) {
-            set.insert((target, sum_target(target)));
-        }
+        set.insert((target, sum_target(target)));
     }
-    set.0
+    set
 }
 
 fn main() -> Result<(), std::io::Error> {
@@ -168,13 +136,29 @@ fn main() -> Result<(), std::io::Error> {
     if opts.stats || !opts.sweep {
         // clone so we can sort it, but still have it unsorted later
         let mut list = sums.clone();
-        list.sort_unstable_by(|(_, l), (_, r)| l.cmp(&r).reverse());
+        list.sort_by(|(_, l), (_, r)| l.cmp(&r).reverse());
+
+        let mut size = 0;
+        let mut files = 0;
+        let mut dirs = 0;
+
         for (k, v) in &list {
+            size += v.size;
+            files += v.files;
+            dirs += v.directories;
+
             println!("{}", k.to_str().unwrap());
             println!("{: >5}: {: >10}", "size", humanize(v.size));
             println!("{: >5}: {: >10}", "files", commaize(v.files));
             println!("{: >5}: {: >10}", "dirs", commaize(v.directories));
         }
+
+        println!("{}", "-".repeat(30));
+        println!("in {} top-level directories:", list.len());
+        println!("{: >5}: {: >10}", "size", humanize(size));
+        println!("{: >5}: {: >10}", "files", commaize(files));
+        println!("{: >5}: {: >10}", "dirs", commaize(dirs));
+
         if !opts.sweep {
             return Ok(());
         }
