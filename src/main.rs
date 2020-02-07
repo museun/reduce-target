@@ -3,16 +3,6 @@ use indexmap::IndexSet;
 
 use std::path::{Path, PathBuf};
 
-macro_rules! abort {
-    ($f:expr, $($args:expr),* $(,)?) => {
-        abort!(format!($f, $($args),*))
-    };
-    ($f:expr) => {{
-        eprintln!("{}", $f);
-        std::process::exit(1)
-    }};
-}
-
 #[derive(Debug, Clone, gumdrop::Options)]
 struct Options {
     #[options(help = "show this message")]
@@ -21,6 +11,9 @@ struct Options {
     #[options(help = "root directory to search")]
     directory: Option<String>,
 
+    #[options(help = "target kind, e.g. docs, release, debug", short = "k")]
+    kind: TargetKind,
+
     #[options(help = "prints directory statistics", short = "s")]
     stats: bool,
 
@@ -28,20 +21,61 @@ struct Options {
     sweep: bool,
 }
 
+// TODO allow to narrowing to 'deps' or 'examples' inside target/{debug,release}
+#[derive(Debug, Copy, Clone)]
+enum TargetKind {
+    Docs,
+    Release,
+    Debug,
+    All,
+}
+
+impl TargetKind {
+    fn as_str(self) -> Option<&'static str> {
+        match self {
+            Self::Docs => "doc",
+            Self::Release => "release",
+            Self::Debug => "debug",
+            Self::All => return None,
+        }
+        .into()
+    }
+}
+
+impl std::str::FromStr for TargetKind {
+    type Err = String;
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let ok = match input {
+            "doc" => Self::Docs,
+            "release" => Self::Release,
+            "debug" => Self::Debug,
+            "all" => Self::All,
+            e => return Err(format!("unknown target kind: '{}'", e)),
+        };
+        Ok(ok)
+    }
+}
+
+impl Default for TargetKind {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
 impl Options {
-    fn get_dir(&self) -> PathBuf {
+    fn get_dir(&self) -> anyhow::Result<PathBuf> {
         let dir = self.directory.clone().unwrap_or_else(|| ".".into());
-        let dir = Path::new(&dir).canonicalize().unwrap_or_else(|e| {
-            match e.kind() {
-                std::io::ErrorKind::NotFound => abort!("cannot find directory: `{}`", dir),
-                _ => abort!("unknown err: {:#?}", e),
+        let dir = Path::new(&dir).canonicalize().map_err(|err| {
+            if let std::io::ErrorKind::NotFound = err.kind() {
+                return anyhow::anyhow!("cannot find directory: `{}`", dir.escape_debug());
             };
-        });
+            anyhow::Error::new(err)
+        })?;
 
         match (dir.exists(), dir.is_dir()) {
-            (false, _) => abort!("directory doesn't exist: `{}`", dir.display()),
-            (_, false) => abort!("invalid directory: `{}`", dir.display()),
-            _ => dir,
+            (false, _) => anyhow::bail!("directory doesn't exist: `{}`", dir.display()),
+            (_, false) => anyhow::bail!("invalid directory: `{}`", dir.display()),
+            _ => Ok(dir),
         }
     }
 }
@@ -75,19 +109,35 @@ fn commaize(d: u64) -> String {
     buf
 }
 
-fn find_targets(root: impl AsRef<Path>) -> Result<Vec<PathBuf>, std::io::Error> {
+fn find_targets(root: impl AsRef<Path>, kind: TargetKind) -> anyhow::Result<Vec<PathBuf>> {
+    let subdir = kind.as_str();
+
     let mut paths = vec![];
     for dir in root.as_ref().read_dir()?.flatten().filter_map(|fi| {
-        fi.file_type()
-            .ok()
-            .and_then(|f| if f.is_dir() { Some(fi) } else { None })
+        let f = fi.file_type().ok()?;
+        Some(fi).filter(|_| f.is_dir())
     }) {
-        if dir.file_name() == "target" {
-            paths.push(dir.path());
-        } else {
-            paths.append(&mut find_targets(dir.path())?);
+        if dir.file_name() != "target" {
+            paths.append(&mut find_targets(dir.path(), kind)?);
+            continue;
+        }
+
+        let subdir = match subdir {
+            Some(subdir) => subdir,
+            None => {
+                paths.push(dir.path());
+                continue;
+            }
+        };
+
+        'inner: for inner in dir.path().read_dir()?.flatten() {
+            if inner.file_type()?.is_dir() && inner.file_name() == subdir {
+                paths.push(inner.path());
+                break 'inner;
+            }
         }
     }
+
     Ok(paths)
 }
 
@@ -103,17 +153,16 @@ fn sum_targets(targets: &[PathBuf]) -> IndexSet<(&PathBuf, Record)> {
         walkdir::WalkDir::new(path)
             .into_iter()
             .flatten()
-            .fold(Record::default(), |mut rec, t| {
-                let ty = t.file_type();
-                match (ty.is_file(), ty.is_dir()) {
-                    (true, _) => {
-                        if let Ok(md) = t.metadata() {
-                            rec.size += md.len();
-                            rec.files += 1;
-                        }
+            .fold(Record::default(), |mut rec, ty| {
+                let ft = ty.file_type();
+                if ft.is_file() {
+                    if let Ok(md) = ty.metadata() {
+                        rec.size += md.len();
+                        rec.files += 1;
                     }
-                    (_, true) => rec.directories += 1,
-                    _ => {}
+                }
+                if ft.is_dir() {
+                    rec.directories += 1
                 }
                 rec
             })
@@ -126,49 +175,70 @@ fn sum_targets(targets: &[PathBuf]) -> IndexSet<(&PathBuf, Record)> {
     set
 }
 
-fn main() -> Result<(), std::io::Error> {
+fn print_stats<'a>(stats: impl Iterator<Item = &'a (&'a PathBuf, Record)> + 'a, len: usize) {
+    let mut size = 0;
+    let mut files = 0;
+    let mut dirs = 0;
+
+    for (k, v) in stats {
+        size += v.size;
+        files += v.files;
+        dirs += v.directories;
+
+        println!("{}", fix_display_path(k));
+        println!("{: >5}: {: >10}", "size", humanize(v.size));
+        println!("{: >5}: {: >10}", "files", commaize(v.files));
+        println!("{: >5}: {: >10}", "dirs", commaize(v.directories));
+    }
+
+    println!("{}", "-".repeat(30));
+    println!("in {} top-level directories:", len);
+    println!("{: >5}: {: >10}", "size", humanize(size));
+    println!("{: >5}: {: >10}", "files", commaize(files));
+    println!("{: >5}: {: >10}", "dirs", commaize(dirs));
+}
+
+fn fix_display_path(path: impl Into<PathBuf>) -> String {
+    let path = path.into();
+    if cfg!(target_os = "windows") {
+        path.display().to_string().replace(r"\\?\", "")
+    } else {
+        path.display().to_string()
+    }
+}
+
+fn main() -> anyhow::Result<()> {
     let opts = Options::parse_args_default_or_exit();
 
-    let root = opts.get_dir();
-    let targets = find_targets(&root)?;
+    let root = opts.get_dir()?;
+
+    // TODO print out what we're looking for
+
+    println!(
+        "looking for `{}` recursively under `{}`",
+        opts.kind.as_str().unwrap_or("top-level target"),
+        fix_display_path(&root),
+    );
+
+    let targets = find_targets(&root, opts.kind)?;
     let sums = sum_targets(&targets);
 
     if opts.stats || !opts.sweep {
         // clone so we can sort it, but still have it unsorted later
         let mut list = sums.clone();
         list.sort_by(|(_, l), (_, r)| l.cmp(&r).reverse());
-
-        let mut size = 0;
-        let mut files = 0;
-        let mut dirs = 0;
-
-        for (k, v) in &list {
-            size += v.size;
-            files += v.files;
-            dirs += v.directories;
-
-            println!("{}", k.to_str().unwrap());
-            println!("{: >5}: {: >10}", "size", humanize(v.size));
-            println!("{: >5}: {: >10}", "files", commaize(v.files));
-            println!("{: >5}: {: >10}", "dirs", commaize(v.directories));
-        }
-
-        println!("{}", "-".repeat(30));
-        println!("in {} top-level directories:", list.len());
-        println!("{: >5}: {: >10}", "size", humanize(size));
-        println!("{: >5}: {: >10}", "files", commaize(files));
-        println!("{: >5}: {: >10}", "dirs", commaize(dirs));
-
-        if !opts.sweep {
-            return Ok(());
-        }
+        print_stats(list.iter(), list.len());
     }
 
     if opts.sweep {
-        for dir in sums.iter().map(|(dir, _)| (dir.to_str())).flatten() {
+        for dir in sums.iter().map(|(dir, _)| dir.to_str()).flatten() {
             match std::fs::remove_dir_all(dir) {
-                Ok(..) => println!("removed: {}", dir),
-                Err(err) => eprintln!("could not remove: {} because {}", dir, err),
+                Ok(..) => println!("removed: {}", fix_display_path(dir)),
+                Err(err) => eprintln!(
+                    "could not remove: {} because {}",
+                    fix_display_path(dir),
+                    err
+                ),
             }
         }
     }
