@@ -11,8 +11,11 @@ struct Options {
     #[options(help = "root directory to search")]
     directory: Option<String>,
 
-    #[options(help = "target kind, e.g. docs, release, debug", short = "k")]
-    kind: TargetKind,
+    #[options(
+        help = "target kind. [docs (d, doc), release (rel), debug (dbg)]",
+        short = "k"
+    )]
+    kind: Vec<TargetKind>,
 
     #[options(help = "prints directory statistics", short = "s")]
     stats: bool,
@@ -46,9 +49,9 @@ impl std::str::FromStr for TargetKind {
     type Err = String;
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         let ok = match input {
-            "doc" => Self::Docs,
-            "release" => Self::Release,
-            "debug" => Self::Debug,
+            "d" | "doc" | "docs" => Self::Docs,
+            "rel" | "release" => Self::Release,
+            "dbg" | "debug" => Self::Debug,
             "all" => Self::All,
             e => return Err(format!("unknown target kind: '{}'", e)),
         };
@@ -109,8 +112,8 @@ fn commaize(d: u64) -> String {
     buf
 }
 
-fn find_targets(root: impl AsRef<Path>, kind: TargetKind) -> anyhow::Result<Vec<PathBuf>> {
-    let subdir = kind.as_str();
+fn find_targets(root: impl AsRef<Path>, kind: &Vec<TargetKind>) -> anyhow::Result<Vec<PathBuf>> {
+    let subdirs = kind.iter().filter_map(|s| s.as_str()).collect::<Vec<_>>();
 
     let mut paths = vec![];
     for dir in root.as_ref().read_dir()?.flatten().filter_map(|fi| {
@@ -118,22 +121,24 @@ fn find_targets(root: impl AsRef<Path>, kind: TargetKind) -> anyhow::Result<Vec<
         Some(fi).filter(|_| f.is_dir())
     }) {
         if dir.file_name() != "target" {
-            paths.append(&mut find_targets(dir.path(), kind)?);
+            paths.append(&mut find_targets(dir.path(), &kind)?);
             continue;
         }
 
-        let subdir = match subdir {
-            Some(subdir) => subdir,
-            None => {
-                paths.push(dir.path());
+        if subdirs.is_empty() {
+            paths.push(dir.path());
+            continue;
+        }
+
+        for inner in dir.path().read_dir()?.flatten() {
+            if !inner.file_type()?.is_dir() {
                 continue;
             }
-        };
 
-        'inner: for inner in dir.path().read_dir()?.flatten() {
-            if inner.file_type()?.is_dir() && inner.file_name() == subdir {
-                paths.push(inner.path());
-                break 'inner;
+            if let Some(dir) = inner.file_name().to_str() {
+                if subdirs.contains(&dir) {
+                    paths.push(inner.path());
+                }
             }
         }
     }
@@ -211,13 +216,25 @@ fn main() -> anyhow::Result<()> {
     let opts = Options::parse_args_default_or_exit();
     let root = opts.get_dir()?;
 
+    let kinds = opts
+        .kind
+        .iter()
+        .filter_map(|k| k.as_str())
+        .collect::<Vec<_>>();
+
+    let kind = if kinds.is_empty() {
+        kinds.join(",")
+    } else {
+        "top-level target".into()
+    };
+
     println!(
         "looking for `{}` recursively under `{}`",
-        opts.kind.as_str().unwrap_or("top-level target"),
+        kind,
         fix_display_path(&root),
     );
 
-    let targets = find_targets(&root, opts.kind)?;
+    let targets = find_targets(&root, &opts.kind)?;
     let sums = sum_targets(&targets);
 
     if opts.stats || !opts.sweep {
