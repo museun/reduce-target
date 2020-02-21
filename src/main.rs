@@ -222,7 +222,7 @@ fn main() -> anyhow::Result<()> {
         .filter_map(|k| k.as_str())
         .collect::<Vec<_>>();
 
-    let kind = if kinds.is_empty() {
+    let kind = if !kinds.is_empty() {
         kinds.join(",")
     } else {
         "top-level target".into()
