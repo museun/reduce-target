@@ -5,7 +5,9 @@ authors = ["museun <museun@outlook.com>"]
 edition = "2018"
 
 [dependencies]
-walkdir = "2.3.1"
-gumdrop = "0.8.0"
-indexmap = "1.3.2"
+# walkdir = "2.3.1"
 anyhow = "1.0.31"
+gumdrop = "0.8.0"
+indexmap = { version = "1.3.2", features = ["rayon"] }
+jwalk = "0.5.1"
+rayon = "1.3.0"

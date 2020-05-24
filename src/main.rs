@@ -1,5 +1,6 @@
 use gumdrop::Options as _;
 use indexmap::IndexSet;
+use rayon::prelude::*;
 
 use std::path::{Path, PathBuf};
 
@@ -112,7 +113,7 @@ fn commaize(d: u64) -> String {
     buf
 }
 
-fn find_targets(root: impl AsRef<Path>, kind: &Vec<TargetKind>) -> anyhow::Result<Vec<PathBuf>> {
+fn find_targets(root: impl AsRef<Path>, kind: &[TargetKind]) -> anyhow::Result<Vec<PathBuf>> {
     let subdirs = kind.iter().filter_map(|s| s.as_str()).collect::<Vec<_>>();
 
     let mut paths = vec![];
@@ -155,7 +156,7 @@ struct Record {
 
 fn sum_targets(targets: &[PathBuf]) -> IndexSet<(&PathBuf, Record)> {
     fn sum_target(path: &PathBuf) -> Record {
-        walkdir::WalkDir::new(path)
+        jwalk::WalkDir::new(path)
             .into_iter()
             .flatten()
             .fold(Record::default(), |mut rec, ty| {
@@ -246,16 +247,17 @@ fn main() -> anyhow::Result<()> {
     }
 
     if opts.sweep {
-        for dir in sums.iter().map(|(dir, _)| dir.to_str()).flatten() {
-            match std::fs::remove_dir_all(dir) {
+        sums.into_par_iter()
+            .map(|(dir, _)| dir.to_str())
+            .flatten()
+            .for_each(|dir| match std::fs::remove_dir_all(dir) {
                 Ok(..) => println!("removed: {}", fix_display_path(dir)),
                 Err(err) => eprintln!(
                     "could not remove: {} because {}",
                     fix_display_path(dir),
                     err
                 ),
-            }
-        }
+            });
     }
 
     Ok(())
