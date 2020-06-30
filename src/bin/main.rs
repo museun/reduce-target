@@ -82,7 +82,6 @@ fn main() -> anyhow::Result<()> {
     if opts.stats || !opts.sweep {
         // clone so we can sort it, but still have it unsorted later
         let mut list = sums.clone();
-        // TODO sort by cached key and std::cmp::Reverse
         list.sort_by(|(_, l), (_, r)| l.cmp(&r).reverse());
         print_stats(list.iter(), list.len());
     }

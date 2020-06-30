@@ -10,7 +10,6 @@ pub struct Input {
     map: HashMap<Profile, Vec<TargetKind>>,
 }
 
-// TODO this isn't really that efficient
 // TODO doc shouldn't have any `target kinds`
 impl std::fmt::Display for Input {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -23,8 +22,13 @@ impl std::fmt::Display for Input {
             values: impl Iterator<Item = &'a str> + Clone,
         ) -> std::fmt::Result {
             for key in keys {
-                writeln!(f, "{}", key)?;
-                write!(f, "- ")?;
+                writeln!(f, "- {}", key)?;
+                // TODO why is this a str
+                if key == "doc" {
+                    continue;
+                }
+
+                write!(f, "  - ")?;
                 for (i, value) in values.clone().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -71,7 +75,13 @@ impl Input {
     }
 
     pub fn add(&mut self, profile: Profile, kind: TargetKind) {
-        self.map.entry(profile).or_default().push(kind);
+        if let Profile::All = profile {
+            self.add(Profile::Debug, kind);
+            self.add(Profile::Release, kind);
+            self.add(Profile::Doc, TargetKind::All);
+        } else {
+            self.map.entry(profile).or_default().push(kind);
+        }
     }
 
     pub fn filter(&self, targets: &[PathBuf]) -> Vec<PathBuf> {
@@ -96,11 +106,10 @@ impl Input {
                     .as_str()
                     .map(|child| path.join(child))
                     .unwrap_or_else(|| path.to_path_buf());
-                if !p.is_dir() {
-                    // TODO warn on this
-                    continue;
+
+                if p.is_dir() {
+                    out.push(p);
                 }
-                out.push(p)
             }
         }
 

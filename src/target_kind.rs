@@ -40,7 +40,19 @@ impl std::str::FromStr for TargetKind {
             "ex" | "examples" => Self::Examples,
             "inc" | "incremental" => Self::Incremental,
             "all" => Self::All,
-            e => return Err(format!("unknown target kind: '{}'", e)),
+            e => {
+                return Err(format!(
+                    r#"unknown target kind: '{}' 
+these are supported: 
+    for build artifacts: 'b', 'build'
+    for buil deps: 'd', 'deps'
+    for examples: 'ex', 'examples'
+    for incremental artifacts: 'inc', 'incremental'
+    and 'all' for everything
+"#,
+                    e
+                ))
+            }
         };
         Ok(ok)
     }

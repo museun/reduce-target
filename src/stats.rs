@@ -29,17 +29,18 @@ pub fn sum_targets(targets: &[PathBuf]) -> IndexSet<(&PathBuf, Record)> {
             })
     }
 
-    let mut set = IndexSet::with_capacity(targets.len());
-    for target in targets {
-        set.insert((target, sum_target(target)));
-    }
-    set
+    targets
+        .iter()
+        .fold(IndexSet::with_capacity(targets.len()), |mut set, target| {
+            set.insert((target, sum_target(target)));
+            set
+        })
 }
 
-// TODO redo this
 pub fn print_stats<'a>(stats: impl Iterator<Item = &'a (&'a PathBuf, Record)> + 'a, len: usize) {
     let (mut size, mut files, mut dirs) = <_>::default();
-
+    // TODO this should keep a histogram of the 'target kinds'
+    // or at the very least print a tree
     for (k, v) in stats {
         size += v.size;
         files += v.files;
@@ -51,7 +52,7 @@ pub fn print_stats<'a>(stats: impl Iterator<Item = &'a (&'a PathBuf, Record)> + 
         println!("{: >5}: {: >10}", "dirs", commaize(v.directories));
     }
 
-    println!("{}", "-".repeat(30));
+    println!("{}", "-".repeat(40));
     println!("in {} top-level directories:", len);
     println!("{: >5}: {: >10}", "size", humanize(size));
     println!("{: >5}: {: >10}", "files", commaize(files));
