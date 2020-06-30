@@ -24,9 +24,14 @@ impl std::fmt::Display for Input {
         ) -> std::fmt::Result {
             for key in keys {
                 writeln!(f, "{}", key)?;
-                for value in values.clone() {
-                    writeln!(f, "- {}", value)?;
+                write!(f, "- ")?;
+                for (i, value) in values.clone().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", value)?;
                 }
+                writeln!(f)?;
             }
             Ok(())
         }
